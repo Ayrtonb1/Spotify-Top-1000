@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: spotify-top-1000
+    env: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    autoDeploy: true
