@@ -1,4 +1,4 @@
-gradio>=5.0
+gradio>=5.10
 spotipy>=2.25
 fastapi>=0.95
 uvicorn>=0.23
