@@ -1,22 +1,26 @@
 import os
 import json
 from collections import Counter
-from urllib.parse import urlencode, parse_qs
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+import gradio as gr
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-# ================ CONFIG ================
+from fastapi import FastAPI, Request
+from starlette.responses import RedirectResponse, HTMLResponse
+from fastapi.middleware.wsgi import WSGIMiddleware
 
-CLIENT_ID = os.environ["SPOTIFY_CLIENT_ID"]
-CLIENT_SECRET = os.environ["SPOTIFY_CLIENT_SECRET"]
 
-# Use your Render domain here once deployed, or set via env
-BASE_URL = os.environ.get("BASE_URL", "https://your-app-name.onrender.com")
+# ================================================================
+# CONFIG
+# ================================================================
 
-REDIRECT_URI = BASE_URL + "/callback"
+CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+
+BASE_URL = "https://spotify-top-1000.onrender.com"
+REDIRECT_URI = f"{BASE_URL}/callback"
 
 SCOPE = (
     "user-top-read user-library-read user-read-recently-played "
@@ -25,90 +29,169 @@ SCOPE = (
 
 PLAYLIST_NAME = "Best 1000 All-Time Tracks"
 
-auth_manager = SpotifyOAuth(
-    client_id=CLIENT_ID,
-    client_secret=CLIENT_SECRET,
-    redirect_uri=REDIRECT_URI,
-    scope=SCOPE
-)
 
-app = FastAPI()
+# ================================================================
+# FASTAPI — Backend for OAuth
+# ================================================================
+
+api = FastAPI()
+
+# temporary storage — persisted per session in Gradio
+oauth_codes = {}   # maps session_token → auth code
 
 
-@app.get("/login")
+@api.get("/login")
 def login():
-    url = auth_manager.get_authorize_url()
-    return {"auth_url": url}
+    """Redirects user to Spotify OAuth login."""
+    params = {
+        "client_id": CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": REDIRECT_URI,
+        "scope": SCOPE,
+    }
+    url = "https://accounts.spotify.com/authorize?" + urlencode(params)
+    return RedirectResponse(url)
 
 
-@app.get("/callback")
-async def callback(request: Request):
+@api.get("/callback")
+def callback(request: Request):
+    """Spotify redirects here. Extract ?code= and save it."""
     params = dict(request.query_params)
     code = params.get("code")
+
     if not code:
-        return HTMLResponse("<h1>Error: No code provided</h1>")
+        return HTMLResponse("<h1>❌ No authorization code received.</h1>")
 
-    # Exchange code for token
-    token_info = auth_manager.get_access_token(code)
-    access_token = token_info["access_token"]
+    # Store code in memory under a short token
+    session_token = os.urandom(8).hex()
+    oauth_codes[session_token] = code
 
-    # Show simple HTML page or redirect somewhere
     return HTMLResponse(f"""
-        <h2>Authenticated!</h2>
-        <p>Your access token: <code>{access_token}</code></p>
-        <p>You can now go back to the app and use the token.</p>
+        <h1>🎉 Spotify Login Successful!</h1>
+        <p>Return to the app. Your authentication is complete.</p>
+        <p>Copy this session token into the Gradio app:</p>
+        <b>{session_token}</b>
     """)
 
 
-@app.post("/generate")
-async def generate(data: dict):
-    # data should include {"code": "...", "files": [...]}
-    code = data.get("code")
-    files = data.get("files", [])
+# ================================================================
+# PLAYLIST GENERATOR
+# ================================================================
 
-    if not code:
-        return {"status": "error", "message": "no auth code"}
+def generate_playlist(session_token, files):
+    if not session_token:
+        return "❌ Please authenticate first.", None
 
-    token_info = auth_manager.get_access_token(code)
-    sp = spotipy.Spotify(auth=token_info["access_token"])
-    user = sp.current_user()
+    auth_code = oauth_codes.get(session_token)
+    if not auth_code:
+        return "❌ Session token not found or expired.", None
 
-    all_tracks = []
-    for file_data in files:
-        # assume file_data is a JSON-string already
-        all_tracks.extend(json.loads(file_data))
+    try:
+        auth_manager = SpotifyOAuth(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            redirect_uri=REDIRECT_URI,
+            scope=SCOPE,
+        )
 
-    track_playtime = Counter()
-    for entry in all_tracks:
-        name = entry.get("master_metadata_track_name")
-        artist = entry.get("master_metadata_album_artist_name")
-        ms = entry.get("ms_played", 0)
-        uri = entry.get("spotify_track_uri")
+        token_info = auth_manager.get_access_token(auth_code, check_cache=False)
+        sp = spotipy.Spotify(auth=token_info["access_token"])
+        user = sp.current_user()
 
-        if not name or not artist or ms < 30_000:
-            continue
+        logs = [f"✅ Logged in as {user['display_name']}"]
 
-        key = uri if uri else f"{name} - {artist}"
-        track_playtime[key] += ms
+        # Load all JSON streaming history files
+        all_tracks = []
+        for f in files:
+            if isinstance(f, bytes):
+                all_tracks.extend(json.loads(f.decode("utf-8")))
+            else:
+                all_tracks.extend(json.load(f))
+        logs.append(f"📂 Loaded {len(all_tracks):,} plays.")
 
-    top = [t for t, _ in track_playtime.most_common(1000)]
+        # Count playtime
+        track_playtime = Counter()
+        for entry in all_tracks:
+            name = entry.get("master_metadata_track_name")
+            artist = entry.get("master_metadata_album_artist_name")
+            ms = entry.get("ms_played", 0)
+            uri = entry.get("spotify_track_uri")
 
-    matched_ids = []
-    for t in top:
-        if t.startswith("spotify:track:"):
-            matched_ids.append(t.split(":")[-1])
-        else:
-            name, artist = t.split(" - ", 1) if " - " in t else (t, "")
-            results = sp.search(f"track:{name} artist:{artist}", type="track", limit=1)
-            items = results["tracks"]["items"]
-            if items:
-                matched_ids.append(items[0]["id"])
+            if not name or not artist or ms < 30_000:
+                continue
 
-    playlist = sp.user_playlist_create(
-        user["id"], PLAYLIST_NAME, public=False,
-        description="Top 1000 songs"
+            key = uri if uri else f"{name} - {artist}"
+            track_playtime[key] += ms
+
+        top_tracks = [t for t, _ in track_playtime.most_common(1000)]
+        logs.append(f"🎧 Found {len(top_tracks)} top tracks.")
+
+        matched_ids = []
+        for t in top_tracks:
+            if t.startswith("spotify:track:"):
+                matched_ids.append(t.split(":")[-1])
+            else:
+                name, artist = t.split(" - ", 1)
+                results = sp.search(f"track:{name} artist:{artist}", type="track")
+                items = results["tracks"]["items"]
+                if items:
+                    matched_ids.append(items[0]["id"])
+
+        # Create playlist
+        playlist = sp.user_playlist_create(
+            user["id"],
+            PLAYLIST_NAME,
+            public=False,
+            description="Top 1000 songs ranked by total playtime.",
+        )
+
+        for i in range(0, len(matched_ids), 100):
+            sp.playlist_add_items(playlist["id"], matched_ids[i:i+100])
+
+        url = playlist["external_urls"]["spotify"]
+        logs.append(f"🎉 Playlist created: {url}")
+
+        return "\n".join(logs), f"<a href='{url}' target='_blank'>{url}</a>"
+
+    except Exception as e:
+        return f"❌ Error: {e}", None
+
+
+# ================================================================
+# GRADIO UI
+# ================================================================
+
+with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
+
+    gr.Markdown("# 🎧 Spotify Top 1000 Playlist Generator\nMade dark, modern, simple.")
+
+    gr.Markdown("### Step 1 — Log in")
+    gr.Markdown(f"[🔐 **Click here to log in with Spotify**]({BASE_URL}/login)")
+
+    session_token = gr.Textbox(
+        label="Paste session token from /callback page",
+        placeholder="e.g., a3f91b7c2d8e4d1a"
     )
-    for i in range(0, len(matched_ids), 100):
-        sp.playlist_add_items(playlist["id"], matched_ids[i:i+100])
 
-    return {"status": "success", "playlist_url": playlist["external_urls"]["spotify"]}
+    gr.Markdown("### Step 2 — Upload your Streaming History JSON files")
+    files = gr.File(file_count="multiple", file_types=[".json"], type="binary")
+
+    run_btn = gr.Button("🎶 Generate Playlist")
+    logs = gr.Textbox(lines=25, label="Status")
+    link = gr.HTML()
+
+    run_btn.click(generate_playlist,
+                  inputs=[session_token, files],
+                  outputs=[logs, link])
+
+
+# Mount Gradio onto FastAPI
+api.mount("/", WSGIMiddleware(gradio_app))
+
+
+# ================================================================
+# LAUNCH (Render runs this automatically via `startCommand`)
+# ================================================================
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(api, host="0.0.0.0", port=8080)
