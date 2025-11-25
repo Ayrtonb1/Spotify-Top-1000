@@ -14,11 +14,10 @@ from fastapi.middleware.wsgi import WSGIMiddleware
 # ================================================================
 # CONFIG
 # ================================================================
-
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
-BASE_URL = "https://spotify-top-1000.onrender.com"
+BASE_URL = "https://spotify-top-1000.onrender.com"  # your Render URL
 REDIRECT_URI = f"{BASE_URL}/callback"
 
 SCOPE = (
@@ -31,11 +30,11 @@ PLAYLIST_NAME = "Best 1000 All-Time Tracks"
 # ================================================================
 # FASTAPI — Backend for OAuth
 # ================================================================
-
 app = FastAPI()
 
 # temporary storage — persisted per session in Gradio
-oauth_codes = {}  # maps session_token → auth code
+oauth_codes = {}   # maps session_token → auth code
+
 
 @app.get("/login")
 def login():
@@ -73,10 +72,16 @@ def callback(request: Request):
 # ================================================================
 # PLAYLIST GENERATOR
 # ================================================================
-
 def generate_playlist(session_token, files):
+    # ensure files is a list
+    if not isinstance(files, list):
+        files = [files] if files else []
+
     if not session_token:
         return "❌ Please authenticate first.", None
+
+    if not files:
+        return "❌ No files uploaded.", None
 
     auth_code = oauth_codes.get(session_token)
     if not auth_code:
@@ -155,7 +160,6 @@ def generate_playlist(session_token, files):
 # ================================================================
 # GRADIO UI
 # ================================================================
-
 with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
 
     gr.Markdown("# 🎧 Spotify Top 1000 Playlist Generator\nMade dark, modern, simple.")
@@ -179,12 +183,7 @@ with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
                   inputs=[session_token, files],
                   outputs=[logs, link])
 
+# ================================================================
 # Mount Gradio onto FastAPI
+# ================================================================
 app.mount("/", WSGIMiddleware(gradio_app))
-
-# ================================================================
-# LAUNCH (Render runs this automatically via `startCommand`)
-# ================================================================
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
