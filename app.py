@@ -9,11 +9,11 @@ from spotipy.oauth2 import SpotifyOAuth
 
 from fastapi import FastAPI, Request
 from starlette.responses import RedirectResponse, HTMLResponse
-from gradio.routes import mount_gradio_app
+from fastapi.middleware.wsgi import WSGIMiddleware
 
-# ==========================
+# ================================================================
 # CONFIG
-# ==========================
+# ================================================================
 
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -28,16 +28,16 @@ SCOPE = (
 
 PLAYLIST_NAME = "Best 1000 All-Time Tracks"
 
-# ==========================
+# ================================================================
 # FASTAPI — Backend for OAuth
-# ==========================
+# ================================================================
 
-api = FastAPI()
+app = FastAPI()
 
-# temporary storage — maps session_token → auth code
-oauth_codes = {}
+# temporary storage — persisted per session in Gradio
+oauth_codes = {}  # maps session_token → auth code
 
-@api.get("/login")
+@app.get("/login")
 def login():
     """Redirects user to Spotify OAuth login."""
     params = {
@@ -49,7 +49,8 @@ def login():
     url = "https://accounts.spotify.com/authorize?" + urlencode(params)
     return RedirectResponse(url)
 
-@api.get("/callback")
+
+@app.get("/callback")
 def callback(request: Request):
     """Spotify redirects here. Extract ?code= and save it."""
     params = dict(request.query_params)
@@ -69,9 +70,9 @@ def callback(request: Request):
         <b>{session_token}</b>
     """)
 
-# ==========================
+# ================================================================
 # PLAYLIST GENERATOR
-# ==========================
+# ================================================================
 
 def generate_playlist(session_token, files):
     if not session_token:
@@ -88,6 +89,7 @@ def generate_playlist(session_token, files):
             redirect_uri=REDIRECT_URI,
             scope=SCOPE,
         )
+
         token_info = auth_manager.get_access_token(auth_code, check_cache=False)
         sp = spotipy.Spotify(auth=token_info["access_token"])
         user = sp.current_user()
@@ -126,7 +128,7 @@ def generate_playlist(session_token, files):
                 matched_ids.append(t.split(":")[-1])
             else:
                 name, artist = t.split(" - ", 1)
-                results = sp.search(f"track:{name} artist:{artist}", type="track", limit=1)
+                results = sp.search(f"track:{name} artist:{artist}", type="track")
                 items = results["tracks"]["items"]
                 if items:
                     matched_ids.append(items[0]["id"])
@@ -150,13 +152,13 @@ def generate_playlist(session_token, files):
     except Exception as e:
         return f"❌ Error: {e}", None
 
-# ==========================
+# ================================================================
 # GRADIO UI
-# ==========================
+# ================================================================
 
 with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
 
-    gr.Markdown("# 🎧 Spotify Top 1000 Playlist Generator\nMade sleek & modern.")
+    gr.Markdown("# 🎧 Spotify Top 1000 Playlist Generator\nMade dark, modern, simple.")
 
     gr.Markdown("### Step 1 — Log in")
     gr.Markdown(f"[🔐 **Click here to log in with Spotify**]({BASE_URL}/login)")
@@ -173,16 +175,16 @@ with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
     logs = gr.Textbox(lines=25, label="Status")
     link = gr.HTML()
 
-    run_btn.click(generate_playlist, inputs=[session_token, files], outputs=[logs, link])
+    run_btn.click(generate_playlist,
+                  inputs=[session_token, files],
+                  outputs=[logs, link])
 
-# ==========================
-# MOUNT GRADIO NATIVE ASGI
-# ==========================
-mount_gradio_app(api, gradio_app, path="/")
+# Mount Gradio onto FastAPI
+app.mount("/", WSGIMiddleware(gradio_app))
 
-# ==========================
-# LAUNCH (Render runs this via `startCommand`)
-# ==========================
+# ================================================================
+# LAUNCH (Render runs this automatically via `startCommand`)
+# ================================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(api, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    uvicorn.run(app, host="0.0.0.0", port=8080)
