@@ -9,7 +9,7 @@ from spotipy.oauth2 import SpotifyOAuth
 
 from fastapi import FastAPI, Request
 from starlette.responses import RedirectResponse, HTMLResponse
-from fastapi.middleware.wsgi import WSGIMiddleware
+from fastapp.middleware.wsgi import WSGIMiddleware
 
 
 # ================================================================
@@ -34,13 +34,13 @@ PLAYLIST_NAME = "Best 1000 All-Time Tracks"
 # FASTAPI — Backend for OAuth
 # ================================================================
 
-api = FastAPI()
+app = FastAPI()
 
 # temporary storage — persisted per session in Gradio
 oauth_codes = {}   # maps session_token → auth code
 
 
-@api.get("/login")
+@app.get("/login")
 def login():
     """Redirects user to Spotify OAuth login."""
     params = {
@@ -53,7 +53,7 @@ def login():
     return RedirectResponse(url)
 
 
-@api.get("/callback")
+@app.get("/callback")
 def callback(request: Request):
     """Spotify redirects here. Extract ?code= and save it."""
     params = dict(request.query_params)
@@ -186,7 +186,7 @@ with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
 
 
 # Mount Gradio onto FastAPI
-api.mount("/", WSGIMiddleware(gradio_app))
+app.mount("/", WSGIMiddleware(gradio_app))
 
 
 # ================================================================
