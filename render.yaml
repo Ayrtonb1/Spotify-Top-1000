@@ -4,7 +4,5 @@ services:
     env: python
     plan: free
     region: oregon
-    branch: main
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
-    autoDeploy: true
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
