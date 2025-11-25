@@ -9,7 +9,7 @@ from spotipy.oauth2 import SpotifyOAuth
 
 from fastapi import FastAPI, Request
 from starlette.responses import RedirectResponse, HTMLResponse
-from fastapp.middleware.wsgi import WSGIMiddleware
+from fastapi.middleware.wsgi import WSGIMiddleware
 
 
 # ================================================================
