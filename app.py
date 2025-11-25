@@ -103,10 +103,8 @@ def generate_playlist(session_token, files):
         # Load all JSON streaming history files
         all_tracks = []
         for f in files:
-            if isinstance(f, bytes):
-                all_tracks.extend(json.loads(f.decode("utf-8")))
-            else:
-                all_tracks.extend(json.load(f))
+            all_tracks.extend(json.load(f))
+
         logs.append(f"📂 Loaded {len(all_tracks):,} plays.")
 
         # Count playtime
@@ -174,7 +172,8 @@ with gr.Blocks(title="Spotify Playlist Builder") as gradio_app:
     )
 
     gr.Markdown("### Step 2 — Upload your Streaming History JSON files")
-    files = gr.File(file_count="multiple", file_types=[".json"], type="binary")
+    files = gr.File(file_count="multiple", file_types=[".json"], type="file")
+
 
     run_btn = gr.Button("🎶 Generate Playlist")
     logs = gr.Textbox(lines=25, label="Status")
