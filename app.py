@@ -126,11 +126,17 @@ def generate_playlist(files):
     if not all_tracks:
         return "❌ No valid Spotify track URIs found in files.", None
 
-    # Sort by playtime descending
-    all_tracks.sort(key=lambda x: x[1], reverse=True)
+    # Remove duplicates (keep highest playtime)
+    unique_tracks = {}
+    for uri, ms_played in all_tracks:
+        if uri not in unique_tracks or ms_played > unique_tracks[uri]:
+            unique_tracks[uri] = ms_played
+
+    # Convert back to list and sort by playtime descending
+    sorted_tracks = sorted(unique_tracks.items(), key=lambda x: x[1], reverse=True)
 
     # Cap at 1000
-    capped_tracks = [uri for uri, _ in all_tracks[:1000]]
+    capped_tracks = [uri for uri, _ in sorted_tracks[:1000]]
 
     # Create playlist
     playlist_name = "Generated Playlist"
@@ -156,7 +162,8 @@ def generate_playlist(files):
         if add_resp.status_code != 201:
             return f"❌ Failed to add tracks: {add_resp.text}", None
 
-    return f"🎉 Playlist created in your Spotify account with {len(capped_tracks)} tracks!", None
+    return f"🎉 Playlist created in your Spotify account with {len(capped_tracks)} unique tracks!", None
+
 
 # ---------------------------
 # Gradio Interface
