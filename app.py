@@ -5,9 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 import gradio as gr
 
-# ---------------------------
-# 🔐 Spotify Credentials
-# ---------------------------
+# Spotify Credentials
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 REDIRECT_URI = os.getenv(
@@ -15,15 +13,9 @@ REDIRECT_URI = os.getenv(
     "https://spotify-top-1000.onrender.com/spotify/callback"
 )
 
-# ---------------------------
-# 🌐 FastAPI app
-# ---------------------------
 app = FastAPI()
-TOKENS = {}  # in-memory token storage
+TOKENS = {}
 
-# ---------------------------
-# 🎵 Spotify Helpers
-# ---------------------------
 def get_tokens(code):
     url = "https://accounts.spotify.com/api/token"
     data = {
@@ -36,9 +28,6 @@ def get_tokens(code):
     resp = requests.post(url, data=data)
     return resp.json()
 
-# ---------------------------
-# 🔙 OAuth Callback Endpoint
-# ---------------------------
 @app.get("/spotify/callback")
 async def spotify_callback(request: Request, code: str = None, state: str = None):
     if not code or not state:
@@ -56,9 +45,6 @@ async def spotify_callback(request: Request, code: str = None, state: str = None
         <p>You can now close this window.</p>
     """)
 
-# ---------------------------
-# 🎧 Playlist Generator Logic
-# ---------------------------
 def generate_playlist(session_token, files):
     if not session_token:
         return "❌ Please authenticate first.", None
@@ -81,12 +67,8 @@ def generate_playlist(session_token, files):
 
     return f"🎉 Playlist generated with {len(all_tracks)} tracks!", None
 
-# ---------------------------
-# 🎨 Gradio UI
-# ---------------------------
 with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
 
-    # ---- Custom CSS ----
     gr.HTML("""
     <style>
         body { font-family: 'Arial', sans-serif; background-color: #121212; color: #fff; }
@@ -102,14 +84,13 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
 
     gr.Markdown("<h1 id='header'>🎵 Spotify Playlist Generator</h1>")
 
-    # ---- Step 1: Login ----
-    with gr.Box(elem_classes="step-box"):
+    # Step 1: Login
+    with gr.Group(elem_classes="step-box"):
         gr.Markdown("### Step 1: Login to Spotify")
         session_token = gr.State(value="")
         login_btn = gr.Button("Login to Spotify")
         status_box = gr.Textbox(label="Status", interactive=False, value="Not authenticated")
 
-        # JS for OAuth popup
         login_btn.click(
             fn=lambda: None,
             inputs=[],
@@ -124,7 +105,6 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
             """
         )
 
-        # Listen for message from callback
         gr.HTML("""
         <script>
             window.addEventListener('message', e => {
@@ -136,8 +116,8 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
         </script>
         """)
 
-    # ---- Step 2: Upload ----
-    with gr.Box(elem_classes="step-box"):
+    # Step 2: Upload
+    with gr.Group(elem_classes="step-box"):
         gr.Markdown("### Step 2: Upload JSON Files")
         files = gr.File(
             label="Upload JSON Files",
@@ -146,8 +126,8 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
             type="binary"
         )
 
-    # ---- Step 3: Generate ----
-    with gr.Box(elem_classes="step-box"):
+    # Step 3: Generate
+    with gr.Group(elem_classes="step-box"):
         gr.Markdown("### Step 3: Generate Playlist")
         output_text = gr.Textbox(label="Status")
         output_img = gr.Image(label="Preview (optional)", visible=False)
@@ -158,7 +138,4 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
             outputs=[output_text, output_img]
         )
 
-# ---------------------------
-# 🔌 Mount Gradio onto FastAPI
-# ---------------------------
 app = gr.mount_gradio_app(app, gradio_app, path="/")
