@@ -65,7 +65,6 @@ def spotify_callback(code: str):
     tokens = get_tokens(code)
     if "access_token" in tokens:
         SPOTIFY_TOKENS["access_token"] = tokens["access_token"]
-        # Close popup automatically
         return """<script>
         alert('Spotify authentication successful!');
         window.close();
@@ -118,12 +117,42 @@ def generate_playlist(files):
     if not track_uris:
         return "❌ No valid Spotify track URIs found in files.", None
 
-    # Cap playlist at 1000
+    # Cap at 1000
     track_uris = track_uris[:1000]
 
-    # Placeholder for creating playlist in Spotify
+    # 1️⃣ Get Current User ID
+    headers = {"Authorization": f"Bearer {access_token}"}
+    user_resp = requests.get("https://api.spotify.com/v1/me", headers=headers)
+    if user_resp.status_code != 200:
+        return f"❌ Failed to get user profile: {user_resp.text}", None
+    user_id = user_resp.json()["id"]
+
+    # 2️⃣ Create Playlist
     playlist_name = "Generated Playlist"
-    return f"🎉 Playlist generated with {len(track_uris)} tracks!", None
+    playlist_data = {
+        "name": playlist_name,
+        "description": "Generated automatically from JSON",
+        "public": True,
+    }
+    create_resp = requests.post(
+        f"https://api.spotify.com/v1/users/{user_id}/playlists",
+        headers=headers,
+        json=playlist_data
+    )
+    if create_resp.status_code != 201:
+        return f"❌ Failed to create playlist: {create_resp.text}", None
+    playlist_id = create_resp.json()["id"]
+
+    # 3️⃣ Add Tracks
+    add_resp = requests.post(
+        f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
+        headers=headers,
+        json={"uris": track_uris}
+    )
+    if add_resp.status_code not in [201, 200]:
+        return f"❌ Failed to add tracks: {add_resp.text}", None
+
+    return f"🎉 Playlist created in your Spotify account with {len(track_uris)} tracks!", None
 
 # ---------------------------
 # Gradio Interface
@@ -138,7 +167,6 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
     status_btn = gr.Button("🔄 Check Login Status")
     status_btn.click(fn=check_login_status, inputs=[], outputs=[status_box])
 
-    # Open Spotify auth in popup
     auth_url = get_auth_url()
     login_btn.click(fn=lambda: None, inputs=[], outputs=[], js=f"window.open('{auth_url}', '_blank')")
 
