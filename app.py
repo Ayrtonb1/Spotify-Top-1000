@@ -113,7 +113,7 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
 
     # Step 2: Upload
     gr.Markdown("### Step 2: Upload JSON Files")
-    files = gr.File(label="Upload JSON Files", file_types=[".json"], file_count="multiple", type="file")
+    files = gr.File(label="Upload JSON Files", file_types=[".json"], file_count="multiple", type="binary")
 
     # Step 3: Generate
     gr.Markdown("### Step 3: Generate Playlist")
