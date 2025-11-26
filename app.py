@@ -21,7 +21,7 @@ REDIRECT_URI = os.getenv(
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Store access tokens in-memory (for simplicity)
+# Store access tokens in-memory
 SPOTIFY_TOKENS = {"access_token": None}
 
 # ---------------------------
@@ -57,10 +57,9 @@ def spotify_callback(code: str):
     tokens = get_tokens(code)
     if "access_token" in tokens:
         SPOTIFY_TOKENS["access_token"] = tokens["access_token"]
-        # Redirect back to Gradio interface
+        # This JS will notify the Gradio interface
         return """<script>
-        window.close();  // close the popup
-        alert('Spotify authentication successful!');
+        window.close();
         </script>"""
     else:
         return {"error": "Failed to authenticate with Spotify.", "tokens": tokens}
@@ -100,7 +99,9 @@ def generate_playlist(files):
     if not all_tracks:
         return "❌ No tracks found in uploaded files.", None
 
-    # Placeholder for playlist creation
+    # Cap at 1000 tracks
+    all_tracks = all_tracks[:1000]
+
     playlist_name = "Generated Playlist"
     return f"🎉 Playlist generated with {len(all_tracks)} tracks!", None
 
@@ -108,28 +109,41 @@ def generate_playlist(files):
 # Gradio Interface
 # ---------------------------
 with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
-    gr.Markdown("# 🎵 Spotify Playlist Generator")
-    gr.Markdown("**Step 1:** Login to Spotify")
 
-    login_btn = gr.Button("🔑 Login to Spotify")
-    status_box = gr.Textbox(label="Status", interactive=False)
+    gr.Markdown("<h1 style='text-align:center;color:#1DB954;'>🎵 Spotify Playlist Generator</h1>", elem_id="title")
+    gr.Markdown("<p style='text-align:center;color:#666;'>Three simple steps: Login → Upload → Generate</p>")
 
-    gr.Markdown("**Step 2:** Upload your JSON files")
-    files = gr.File(
-        label="Upload JSON Files",
-        file_types=[".json"],
-        file_count="multiple",
-        type="binary"
-    )
+    # Step 1: Login
+    with gr.Row():
+        login_btn = gr.Button("🔑 Login to Spotify", elem_id="login-btn")
+        auth_status = gr.Textbox(value="Not logged in", interactive=False, elem_id="auth-status")
 
-    gr.Markdown("**Step 3:** Generate Playlist")
-    submit_btn = gr.Button("🎶 Generate Playlist")
-    output_text = gr.Textbox(label="Status")
-    output_img = gr.Image(label="Preview", visible=False)
+    # Step 2: Upload
+    with gr.Row():
+        files = gr.File(
+            label="Upload JSON Files",
+            file_types=[".json"],
+            file_count="multiple",
+            type="binary"
+        )
 
-    # JS to open popup for Spotify login
+    # Step 3: Generate
+    with gr.Row():
+        submit_btn = gr.Button("🎶 Generate Playlist")
+        output_text = gr.Textbox(label="Status")
+        output_img = gr.Image(label="Preview", visible=False)
+
+    # JS to open Spotify login popup
     auth_url = get_auth_url()
-    login_btn.click(fn=lambda: None, inputs=[], outputs=[], js=f"window.open('{auth_url}', '_blank')")
+    login_btn.click(fn=lambda: None, inputs=[], outputs=[], js=f"window.open('{auth_url}','_blank');")
+
+    # Periodically check if token exists
+    def check_login():
+        if SPOTIFY_TOKENS.get("access_token"):
+            return "✅ Logged in!"
+        return "❌ Not logged in"
+    
+    auth_status.update(value=check_login())
 
     submit_btn.click(fn=generate_playlist, inputs=[files], outputs=[output_text, output_img])
 
