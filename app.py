@@ -12,8 +12,11 @@ import gradio as gr
 # ---------------------------
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI", "REDIRECT_URI = https://spotify-top-1000.onrender.com/spotify/callback
-")
+REDIRECT_URI = os.getenv(
+    "REDIRECT_URI",
+    "https://spotify-top-1000.onrender.com/spotify/callback"
+)
+
 
 
 # ---------------------------
