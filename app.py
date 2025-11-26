@@ -27,7 +27,7 @@ app.add_middleware(
 )
 
 # Store access token in memory
-SPOTIFY_TOKENS = {"access_token": None}
+SPOTIFY_TOKENS = {"access_token": None, "user_id": None}
 
 # ---------------------------
 # Spotify Helpers
@@ -54,6 +54,15 @@ def get_tokens(code):
     resp = requests.post(url, data=data)
     return resp.json()
 
+def get_user_profile(token):
+    resp = requests.get(
+        "https://api.spotify.com/v1/me",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    if resp.status_code == 200:
+        return resp.json()
+    return None
+
 def check_login_status():
     return "✅ Logged in!" if SPOTIFY_TOKENS.get("access_token") else "❌ Not logged in"
 
@@ -65,10 +74,13 @@ def spotify_callback(code: str):
     tokens = get_tokens(code)
     if "access_token" in tokens:
         SPOTIFY_TOKENS["access_token"] = tokens["access_token"]
-        # Close popup automatically and notify user
+        profile = get_user_profile(tokens["access_token"])
+        if profile:
+            SPOTIFY_TOKENS["user_id"] = profile["id"]
+        # Close popup automatically
         return """<script>
-        alert('Spotify authentication successful!');
         window.close();
+        alert('Spotify authentication successful!');
         </script>"""
     else:
         return {"error": "Failed to authenticate with Spotify.", "tokens": tokens}
@@ -78,7 +90,8 @@ def spotify_callback(code: str):
 # ---------------------------
 def generate_playlist(files):
     access_token = SPOTIFY_TOKENS.get("access_token")
-    if not access_token:
+    user_id = SPOTIFY_TOKENS.get("user_id")
+    if not access_token or not user_id:
         return "❌ Please login to Spotify first.", None
     if not files:
         return "❌ No files uploaded.", None
@@ -101,63 +114,49 @@ def generate_playlist(files):
                 tracks = data
             else:
                 tracks = []
-            all_tracks.extend(tracks)
+            # Extract Spotify URIs with playtime
+            for t in tracks:
+                uri = t.get("spotify_track_uri")
+                ms_played = t.get("ms_played", 0)
+                if uri:
+                    all_tracks.append((uri, ms_played))
         except Exception as e:
             return f"❌ Error reading file: {e}", None
 
-    # Filter tracks with valid Spotify URIs
-    valid_tracks = [t for t in all_tracks if t.get("spotify_track_uri")]
-    if not valid_tracks:
+    if not all_tracks:
         return "❌ No valid Spotify track URIs found in files.", None
 
-    # Sort by playtime (ms_played) descending
-    valid_tracks.sort(key=lambda x: x.get("ms_played", 0), reverse=True)
+    # Sort by playtime descending
+    all_tracks.sort(key=lambda x: x[1], reverse=True)
 
-    # Cap at 1000 tracks
-    top_uris = [t["spotify_track_uri"] for t in valid_tracks[:1000]]
+    # Cap at 1000
+    capped_tracks = [uri for uri, _ in all_tracks[:1000]]
 
-    # Create playlist in user's Spotify account
-    user_resp = requests.get(
-        "https://api.spotify.com/v1/me",
-        headers={"Authorization": f"Bearer {access_token}"}
-    )
-    if user_resp.status_code != 200:
-        return f"❌ Failed to get Spotify user info: {user_resp.json()}", None
-    user_id = user_resp.json()["id"]
-
-    playlist_data = {
-        "name": "Top 1000 Generated Playlist",
-        "description": "Generated from your listening history (weighted by playtime)",
-        "public": True,
-    }
+    # Create playlist
+    playlist_name = "Generated Playlist"
     create_resp = requests.post(
         f"https://api.spotify.com/v1/users/{user_id}/playlists",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        },
-        json=playlist_data,
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"name": playlist_name, "description": "Generated automatically", "public": True}
     )
     if create_resp.status_code != 201:
-        return f"❌ Failed to create playlist: {create_resp.json()}", None
+        return f"❌ Failed to create playlist: {create_resp.text}", None
 
     playlist_id = create_resp.json()["id"]
 
-    # Add tracks in batches of 100 (Spotify API limit)
-    for i in range(0, len(top_uris), 100):
-        batch = top_uris[i:i + 100]
+    # Add tracks in chunks of 100 (Spotify API limit)
+    chunk_size = 100
+    for i in range(0, len(capped_tracks), chunk_size):
+        chunk = capped_tracks[i:i+chunk_size]
         add_resp = requests.post(
             f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            json={"uris": batch},
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"uris": chunk}
         )
         if add_resp.status_code != 201:
-            return f"❌ Failed to add tracks: {add_resp.json()}", None
+            return f"❌ Failed to add tracks: {add_resp.text}", None
 
-    return f"🎉 Playlist created with {len(top_uris)} tracks!", None
+    return f"🎉 Playlist created in your Spotify account with {len(capped_tracks)} tracks!", None
 
 # ---------------------------
 # Gradio Interface
@@ -167,13 +166,9 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
     gr.Markdown("# 🎵 Spotify Playlist Generator")
     gr.Markdown("## Step 1: Login to Spotify")
 
-    # Styled Spotify login button
-    login_btn = gr.Button(
-        "🔑 Login with Spotify",
-        elem_classes="spotify-login-btn"
-    )
+    login_btn = gr.Button("Login with Spotify", elem_classes="spotify-login-btn")
     status_box = gr.Textbox(value=check_login_status(), interactive=False, label="Login Status")
-    status_btn = gr.Button("🔄 Check Login Status")
+    status_btn = gr.Button("🔄 Refresh Status")
     status_btn.click(fn=check_login_status, inputs=[], outputs=[status_box])
 
     # Open Spotify auth in popup
@@ -194,28 +189,6 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
     output_img = gr.Image(label="Preview", visible=False)
 
     submit_btn.click(fn=generate_playlist, inputs=[files], outputs=[output_text, output_img])
-
-# ---------------------------
-# Add custom CSS for Spotify login button
-# ---------------------------
-gradio_app.load(
-    fn=lambda: None,
-    inputs=[],
-    outputs=[],
-    _css="""
-    .spotify-login-btn button {
-        background-color: #1DB954 !important;
-        color: white !important;
-        font-weight: bold !important;
-        font-size: 16px !important;
-        border-radius: 24px !important;
-        padding: 12px 24px !important;
-    }
-    .spotify-login-btn button:hover {
-        background-color: #1ed760 !important;
-    }
-    """
-)
 
 # ---------------------------
 # Mount Gradio on FastAPI
