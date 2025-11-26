@@ -19,24 +19,11 @@ REDIRECT_URI = os.getenv(
 # 🌐 FastAPI app
 # ---------------------------
 app = FastAPI()
-
-# In-memory token storage for demo purposes (replace with DB in production)
-TOKENS = {}
+TOKENS = {}  # in-memory token storage
 
 # ---------------------------
 # 🎵 Spotify Helpers
 # ---------------------------
-def get_auth_url(state):
-    scopes = "playlist-modify-public playlist-modify-private user-library-read"
-    return (
-        "https://accounts.spotify.com/authorize"
-        f"?client_id={CLIENT_ID}"
-        f"&response_type=code"
-        f"&redirect_uri={REDIRECT_URI}"
-        f"&scope={scopes}"
-        f"&state={state}"
-    )
-
 def get_tokens(code):
     url = "https://accounts.spotify.com/api/token"
     data = {
@@ -59,13 +46,10 @@ async def spotify_callback(request: Request, code: str = None, state: str = None
     tokens = get_tokens(code)
     if "access_token" not in tokens:
         return HTMLResponse("<h2>❌ Authentication failed</h2>")
-    # Store the access token by state key
     TOKENS[state] = tokens["access_token"]
-    # Return HTML that triggers a small JS snippet to send token back to Gradio
     return HTMLResponse(f"""
         <h2>✅ Authentication successful!</h2>
         <script>
-            // Send token to Gradio
             window.opener.postMessage({{state: "{state}", token: "{tokens['access_token']}" }}, "*");
             window.close();
         </script>
@@ -80,7 +64,6 @@ def generate_playlist(session_token, files):
         return "❌ Please authenticate first.", None
     if files is None:
         return "❌ No files uploaded.", None
-
     if not isinstance(files, list):
         files = [files]
 
@@ -96,9 +79,6 @@ def generate_playlist(session_token, files):
     if not all_tracks:
         return "❌ No tracks found in uploaded files.", None
 
-    playlist_name = "Generated Playlist"
-    playlist_description = "Made automatically"
-
     return f"🎉 Playlist generated with {len(all_tracks)} tracks!", None
 
 # ---------------------------
@@ -106,36 +86,58 @@ def generate_playlist(session_token, files):
 # ---------------------------
 with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
 
-    gr.Markdown("<h1 style='color:#1DB954;'>🎵 Spotify Playlist Generator</h1>", elem_id="header")
+    # ---- Custom CSS ----
+    gr.HTML("""
+    <style>
+        body { font-family: 'Arial', sans-serif; background-color: #121212; color: #fff; }
+        #header { color: #1DB954; font-weight: bold; }
+        .step-box { border-radius: 12px; padding: 20px; margin: 10px 0; background: linear-gradient(145deg, #1DB95422, #191414); box-shadow: 0 4px 12px rgba(0,0,0,0.3);}
+        button { background-color: #1DB954; color: white; border:none; padding:12px 20px; border-radius:8px; cursor:pointer; transition: all 0.3s ease; font-weight:bold; }
+        button:hover { background-color:#1ed760; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.5);}
+        input, textarea { border-radius:8px; padding:8px; border:none; width:100%; margin-top:5px;}
+        .gr-file { color:#1DB954; font-weight:bold; }
+        h2 { color:#1DB954; }
+    </style>
+    """)
 
-    # Hidden state to store token
-    session_token = gr.State(value="")
+    gr.Markdown("<h1 id='header'>🎵 Spotify Playlist Generator</h1>")
 
-    with gr.Box():
+    # ---- Step 1: Login ----
+    with gr.Box(elem_classes="step-box"):
         gr.Markdown("### Step 1: Login to Spotify")
-        login_btn = gr.Button("Login to Spotify", elem_id="login-btn")
-        token_notice = gr.Textbox(label="Status", interactive=False)
+        session_token = gr.State(value="")
+        login_btn = gr.Button("Login to Spotify")
+        status_box = gr.Textbox(label="Status", interactive=False, value="Not authenticated")
 
-        # JS for automated token retrieval
+        # JS for OAuth popup
         login_btn.click(
             fn=lambda: None,
             inputs=[],
             outputs=[],
-            _js="""
-                () => {
+            _js=f"""
+                () => {{
                     const state = Math.random().toString(36).substring(2);
                     window.spotifyState = state;
-                    const url = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent('${REDIRECT_URI}')}&scope=playlist-modify-public playlist-modify-private user-library-read&state=${state}`;
+                    const url = `https://accounts.spotify.com/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri=${{encodeURIComponent('{REDIRECT_URI}')}}&scope=playlist-modify-public playlist-modify-private user-library-read&state=${{state}}`;
                     window.open(url, "_blank");
-                    return;
-                }
+                }}
             """
         )
 
         # Listen for message from callback
-        gr.HTML("<script>window.addEventListener('message', e => { if(e.data.token) { document.getElementById('login-btn').nextSibling.value = '✅ Authenticated'; window.gradioApp().getComponent('session_token').setValue(e.data.token); } })</script>")
+        gr.HTML("""
+        <script>
+            window.addEventListener('message', e => {
+                if(e.data.token){
+                    document.querySelector('#status').value = '✅ Authenticated';
+                    window.gradioApp().getComponent('session_token').setValue(e.data.token);
+                }
+            });
+        </script>
+        """)
 
-    with gr.Box():
+    # ---- Step 2: Upload ----
+    with gr.Box(elem_classes="step-box"):
         gr.Markdown("### Step 2: Upload JSON Files")
         files = gr.File(
             label="Upload JSON Files",
@@ -144,12 +146,13 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
             type="binary"
         )
 
-    with gr.Box():
+    # ---- Step 3: Generate ----
+    with gr.Box(elem_classes="step-box"):
         gr.Markdown("### Step 3: Generate Playlist")
         output_text = gr.Textbox(label="Status")
         output_img = gr.Image(label="Preview (optional)", visible=False)
-        submit = gr.Button("Generate Playlist")
-        submit.click(
+        generate_btn = gr.Button("Generate Playlist")
+        generate_btn.click(
             fn=generate_playlist,
             inputs=[session_token, files],
             outputs=[output_text, output_img]
