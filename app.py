@@ -73,7 +73,6 @@ def generate_playlist(files):
     all_tracks = []
     for file_bytes in files:
         try:
-            # Some files might be lists of tracks
             data = json.loads(file_bytes.decode("utf-8"))
             if isinstance(data, dict) and "tracks" in data:
                 all_tracks.extend(data["tracks"])
@@ -100,7 +99,7 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
     gr.Markdown("Follow the 3 simple steps below:")
 
     # --- Step 1: Login ---
-    with gr.Box():
+    with gr.Group():
         gr.Markdown("### Step 1: Log in to Spotify")
         login_btn = gr.Button("🔑 Login to Spotify", elem_id="login-btn")
         auth_status = gr.Textbox(value="❌ Not logged in", interactive=False, elem_id="auth-status")
@@ -119,7 +118,7 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
     gr.Timer(interval=2, fn=check_login, outputs=[auth_status])
 
     # --- Step 2: Upload ---
-    with gr.Box():
+    with gr.Group():
         gr.Markdown("### Step 2: Upload JSON Files")
         files = gr.File(
             label="Upload JSON Files",
@@ -129,7 +128,7 @@ with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
         )
 
     # --- Step 3: Generate Playlist ---
-    with gr.Box():
+    with gr.Group():
         gr.Markdown("### Step 3: Generate Playlist")
         output_text = gr.Textbox(label="Status", interactive=False)
         generate_btn = gr.Button("🎶 Generate Playlist")
