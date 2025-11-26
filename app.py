@@ -1,33 +1,28 @@
 import os
 import json
-import base64
 import requests
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI
 import gradio as gr
-import uuid
 
 # ---------------------------
-# Spotify Credentials
+# 🔐 Spotify Credentials
 # ---------------------------
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI", "https://spotify-top-1000.onrender.com/spotify/callback")
+REDIRECT_URI = os.getenv(
+    "REDIRECT_URI",
+    "https://spotify-top-1000.onrender.com/spotify/callback"
+)
 
 # ---------------------------
-# FastAPI app
+# 🌐 FastAPI app
 # ---------------------------
 app = FastAPI()
 
 # ---------------------------
-# In-memory session store
+# 🎵 Spotify Helpers
 # ---------------------------
-session_tokens = {}  # state -> access_token
-
-# ---------------------------
-# Spotify Helpers
-# ---------------------------
-def get_auth_url(state: str):
+def get_auth_url():
     scopes = "playlist-modify-public playlist-modify-private user-library-read"
     return (
         "https://accounts.spotify.com/authorize"
@@ -35,8 +30,8 @@ def get_auth_url(state: str):
         f"&response_type=code"
         f"&redirect_uri={REDIRECT_URI}"
         f"&scope={scopes}"
-        f"&state={state}"
     )
+
 
 def get_tokens(code):
     url = "https://accounts.spotify.com/api/token"
@@ -51,76 +46,100 @@ def get_tokens(code):
     return resp.json()
 
 # ---------------------------
-# OAuth Callback Endpoint
+# 🔙 OAuth Callback Endpoint
 # ---------------------------
 @app.get("/spotify/callback")
-def spotify_callback(request: Request, code: str, state: str):
+def spotify_callback(code: str):
     tokens = get_tokens(code)
     if "access_token" not in tokens:
-        return HTMLResponse(f"<h2>Spotify auth failed</h2><pre>{tokens}</pre>")
-    session_tokens[state] = tokens["access_token"]
-    return HTMLResponse(f"<h2>Authentication successful!</h2><p>You can now return to the app to upload files and generate your playlist.</p>")
+        return {"error": "Failed to authenticate with Spotify.", "tokens": tokens}
+    # Show access token in browser for now
+    return {
+        "message": "Authentication successful! Your access token is ready.",
+        "access_token": tokens["access_token"],
+    }
 
 # ---------------------------
-# Playlist Generator Logic
+# 🎧 Playlist Generator Logic
 # ---------------------------
-def generate_playlist(state: str, files):
-    access_token = session_tokens.get(state)
-    if not access_token:
-        return "❌ Please login first.", None
+def generate_playlist(session_token, files):
+    if not session_token:
+        return "❌ Please authenticate first.", None
     if not files:
         return "❌ No files uploaded.", None
 
-    # Ensure files are bytes
-    if not isinstance(files, list):
-        files = [files]
-    all_tracks = []
+    # Normalize files (list of bytes)
+    normalized_files = []
     for f in files:
+        if hasattr(f, "read"):
+            normalized_files.append(f.read())
+        elif isinstance(f, bytes):
+            normalized_files.append(f)
+
+    all_tracks = []
+    for file_bytes in normalized_files:
         try:
-            data = json.loads(f.read().decode("utf-8") if hasattr(f, "read") else f.decode("utf-8"))
-            tracks = data.get("tracks", [])
+            data = json.loads(file_bytes.decode("utf-8"))
+            # Support both list and dict["tracks"]
+            if isinstance(data, dict) and "tracks" in data:
+                tracks = data["tracks"]
+            elif isinstance(data, list):
+                tracks = data
+            else:
+                tracks = []
             all_tracks.extend(tracks)
         except Exception as e:
             return f"❌ Error reading file: {e}", None
+
     if not all_tracks:
         return "❌ No tracks found in uploaded files.", None
 
-    # Playlist creation (example)
+    # Placeholder for playlist creation
     playlist_name = "Generated Playlist"
     playlist_description = "Made automatically"
-    # You can call Spotify API here to create the playlist using access_token
-
     return f"🎉 Playlist generated with {len(all_tracks)} tracks!", None
 
 # ---------------------------
-# Gradio UI
+# 🎨 Gradio UI
 # ---------------------------
 with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
-    gr.Markdown("## 🎵 Spotify Playlist Generator")
-    gr.Markdown("Follow the steps below to login, upload files, and generate a playlist.")
-
-    state = str(uuid.uuid4())  # unique state for this session
+    gr.Markdown("# 🎵 Spotify Playlist Generator")
+    gr.Markdown("Follow the steps below:")
 
     # Step 1: Login
-    gr.Markdown(f"### Step 1: Login to Spotify")
-    login_btn = gr.Button("Login with Spotify", elem_classes="primary-btn")
+    with gr.Row():
+        login_btn = gr.Button("🔑 Login to Spotify")
+        access_token_box = gr.Textbox(label="Access Token", type="password", interactive=True)
+
+    # Step 2: Upload
+    files = gr.File(
+        label="Upload JSON Files",
+        file_types=[".json"],
+        file_count="multiple",
+        type="binary"
+    )
+
+    # Step 3: Generate
+    submit = gr.Button("🎶 Generate Playlist")
+    output_text = gr.Textbox(label="Status")
+    output_img = gr.Image(label="Preview", visible=False)
+
+    # JS redirect for login button
+    auth_url = get_auth_url()
     login_btn.click(
         fn=lambda: None,
         inputs=[],
         outputs=[],
-        js=f'() => window.open("{get_auth_url(state)}", "_blank")'
+        js=f"window.open('{auth_url}', '_blank')"
     )
 
-    # Step 2: Upload
-    gr.Markdown("### Step 2: Upload JSON Files")
-    files = gr.File(label="Upload JSON Files", file_types=[".json"], file_count="multiple", type="binary")
+    submit.click(
+        fn=generate_playlist,
+        inputs=[access_token_box, files],
+        outputs=[output_text, output_img]
+    )
 
-    # Step 3: Generate
-    gr.Markdown("### Step 3: Generate Playlist")
-    output_text = gr.Textbox(label="Status")
-    output_img = gr.Image(label="Preview (optional)", visible=False)
-    submit = gr.Button("Generate Playlist")
-    submit.click(fn=generate_playlist, inputs=[gr.State(value=state), files], outputs=[output_text, output_img])
-
-# Mount Gradio to FastAPI
+# ---------------------------
+# 🔌 Mount Gradio onto FastAPI
+# ---------------------------
 app = gr.mount_gradio_app(app, gradio_app, path="/")
