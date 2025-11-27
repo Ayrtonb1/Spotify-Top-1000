@@ -96,7 +96,6 @@ def generate_playlist(files):
     if not files:
         return "❌ No files uploaded.", None
 
-    # Normalize files
     normalized_files = []
     for f in files:
         if hasattr(f, "read"):
@@ -114,7 +113,6 @@ def generate_playlist(files):
                 tracks = data
             else:
                 tracks = []
-            # Extract Spotify URIs with playtime
             for t in tracks:
                 uri = t.get("spotify_track_uri")
                 ms_played = t.get("ms_played", 0)
@@ -126,19 +124,15 @@ def generate_playlist(files):
     if not all_tracks:
         return "❌ No valid Spotify track URIs found in files.", None
 
-    # Remove duplicates (keep highest playtime)
+    # Remove duplicates and keep highest playtime
     unique_tracks = {}
     for uri, ms_played in all_tracks:
         if uri not in unique_tracks or ms_played > unique_tracks[uri]:
             unique_tracks[uri] = ms_played
 
-    # Convert back to list and sort by playtime descending
     sorted_tracks = sorted(unique_tracks.items(), key=lambda x: x[1], reverse=True)
-
-    # Cap at 1000
     capped_tracks = [uri for uri, _ in sorted_tracks[:1000]]
 
-    # Create playlist
     playlist_name = "Generated Playlist"
     create_resp = requests.post(
         f"https://api.spotify.com/v1/users/{user_id}/playlists",
@@ -150,7 +144,6 @@ def generate_playlist(files):
 
     playlist_id = create_resp.json()["id"]
 
-    # Add tracks in chunks of 100 (Spotify API limit)
     chunk_size = 100
     for i in range(0, len(capped_tracks), chunk_size):
         chunk = capped_tracks[i:i+chunk_size]
@@ -165,18 +158,38 @@ def generate_playlist(files):
     return f"🎉 Playlist created in your Spotify account with {len(capped_tracks)} unique tracks!", None
 
 # ---------------------------
-# Gradio Interface (Dark + Sleek)
+# Gradio Interface — Spotify-style Dark + Animations
 # ---------------------------
-with gr.Blocks(title="Spotify — Top 1000 Playlist") as gradio_app:
-    # Dark mode CSS via gr.HTML (Gradio 5.1 compatible)
+with gr.Blocks(title="Spotify Top 1000 Playlist") as gradio_app:
     gr.HTML("""
     <style>
-        body, .gradio-container { background-color: #121212 !important; color: #ffffff !important; }
-        .gr-button { background-color: #1db954 !important; color: white !important; border-radius: 8px !important; padding: 8px 16px; }
-        .gr-button:hover { opacity: 0.9 !important; }
-        .gr-textbox, .gr-file { background-color: #1e1e1e !important; border: 1px solid #444 !important; color: white !important; }
-        .gr-panel { background-color: #1b1b1b !important; border-radius: 12px !important; padding: 20px !important; }
+        /* Dark theme background */
+        body, .gradio-container { background-color: #121212 !important; color: #fff !important; font-family: 'Spotify Circular', sans-serif; }
+
+        /* Panel styling */
+        .gr-panel { background-color: #1e1e1e !important; border-radius: 16px !important; padding: 20px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+
+        /* Spotify green buttons */
+        .gr-button { background-color: #1DB954 !important; color: white !important; font-weight: bold; border-radius: 24px !important; padding: 12px 24px; transition: transform 0.2s, box-shadow 0.2s; }
+        .gr-button:hover { transform: scale(1.05); box-shadow: 0 0 20px #1DB954; }
+
+        /* Textbox and file input */
+        .gr-textbox, .gr-file { background-color: #2a2a2a !important; color: white !important; border: 1px solid #444 !important; border-radius: 8px !important; }
+
+        /* Animated header */
+        h1, h2, h3 { transition: color 0.3s; }
+        h1:hover { color: #1DB954; }
+
+        /* Cursor tracer */
+        .cursor-dot { position: fixed; top: 0; left: 0; width: 12px; height: 12px; border-radius: 50%; background: #1DB954; pointer-events: none; z-index: 9999; mix-blend-mode: difference; transition: transform 0.05s ease-out; }
     </style>
+    <div class="cursor-dot" id="cursor-dot"></div>
+    <script>
+        const dot = document.getElementById('cursor-dot');
+        document.addEventListener('mousemove', e => {
+            dot.style.transform = `translate(${e.clientX - 6}px, ${e.clientY - 6}px)`;
+        });
+    </script>
     """)
 
     gr.Markdown("# 🎵 Spotify Top 1000 Playlist Generator")
@@ -187,17 +200,11 @@ with gr.Blocks(title="Spotify — Top 1000 Playlist") as gradio_app:
     status_btn = gr.Button("🔄 Refresh Status")
     status_btn.click(fn=check_login_status, inputs=[], outputs=[status_box])
 
-    # Open Spotify auth in popup
     auth_url = get_auth_url()
     login_btn.click(fn=lambda: None, inputs=[], outputs=[], js=f"window.open('{auth_url}', '_blank')")
 
     gr.Markdown("## Step 2: Upload your JSON files")
-    files = gr.File(
-        label="Upload JSON Files",
-        file_types=[".json"],
-        file_count="multiple",
-        type="binary"
-    )
+    files = gr.File(label="Upload JSON Files", file_types=[".json"], file_count="multiple", type="binary")
 
     gr.Markdown("## Step 3: Generate Playlist")
     submit_btn = gr.Button("🎶 Generate Playlist")
