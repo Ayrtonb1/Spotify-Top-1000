@@ -293,7 +293,10 @@ def get_top_albums(files):
 # ---------------------------
 # Gradio App
 # ---------------------------
-with gr.Blocks(title="Spotify Extended App", theme=gr.themes.Monochrome()) as gradio_app:
+# ---------------------------
+# Gradio App
+# ---------------------------
+with gr.Blocks(title="Spotify Extended App") as gradio_app:
 
     gr.Markdown("# 🎵 Spotify Playlist & Stats Dashboard")
 
@@ -325,3 +328,4 @@ with gr.Blocks(title="Spotify Extended App", theme=gr.themes.Monochrome()) as gr
             album_btn.click(get_top_albums, album_files, album_html)
 
 app = gr.mount_gradio_app(app, gradio_app, path="/")
+
