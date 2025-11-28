@@ -30,7 +30,7 @@ app.add_middleware(
 SPOTIFY_TOKENS = {"access_token": None, "user_id": None}
 
 # ---------------------------
-# Spotify Helpers
+# Spotify Auth Helpers
 # ---------------------------
 def get_auth_url():
     scopes = "playlist-modify-public playlist-modify-private user-library-read"
@@ -77,127 +77,251 @@ def spotify_callback(code: str):
         profile = get_user_profile(tokens["access_token"])
         if profile:
             SPOTIFY_TOKENS["user_id"] = profile["id"]
-        # Close popup automatically
-        return """<script>
-        window.close();
-        alert('Spotify authentication successful!');
-        </script>"""
-    else:
-        return {"error": "Failed to authenticate with Spotify.", "tokens": tokens}
+        return """<script>window.close(); alert('Spotify authentication successful!');</script>"""
+    return {"error": "Failed to authenticate with Spotify.", "tokens": tokens}
 
 # ---------------------------
-# Playlist Generation
+# JSON Parsing Helper
+# ---------------------------
+def parse_uploaded_files(files):
+    """
+    Reads all uploaded JSON files and extracts:
+    - track_uri
+    - artist_uri
+    - album_uri
+    - artist_name
+    - album_name
+    - ms_played
+    """
+    if not files:
+        return []
+
+    records = []
+
+    for f in files:
+        if hasattr(f, "read"):
+            data = json.loads(f.read().decode("utf-8"))
+        else:
+            data = json.loads(f.decode("utf-8"))
+
+        entries = data["tracks"] if isinstance(data, dict) and "tracks" in data else data
+
+        for t in entries:
+            records.append({
+                "track_uri": t.get("spotify_track_uri"),
+                "artist_uri": t.get("spotify_artist_uri"),
+                "album_uri": t.get("spotify_album_uri"),
+                "artist_name": t.get("artist_name"),
+                "album_name": t.get("album_name"),
+                "ms_played": t.get("ms_played", 0)
+            })
+
+    return records
+
+# ---------------------------
+# Spotify Image Fetch
+# ---------------------------
+def fetch_spotify_image(entity_uri, entity_type, token):
+    """
+    entity_type ∈ {"artist", "album"}
+    """
+    if entity_uri is None:
+        return None
+
+    entity_id = entity_uri.split(":")[-1]
+    url = f"https://api.spotify.com/v1/{entity_type}s/{entity_id}"
+
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+    if resp.status_code != 200:
+        return None
+
+    data = resp.json()
+    images = data.get("images", [])
+    if images:
+        return images[0]["url"]
+    return None
+
+# ---------------------------
+# Playlist Generator
 # ---------------------------
 def generate_playlist(files):
     access_token = SPOTIFY_TOKENS.get("access_token")
     user_id = SPOTIFY_TOKENS.get("user_id")
+
     if not access_token or not user_id:
-        return "❌ Please login to Spotify first.", None
-    if not files:
-        return "❌ No files uploaded.", None
+        return "❌ Please login first.", None
 
-    # Normalize files
-    normalized_files = []
-    for f in files:
-        if hasattr(f, "read"):
-            normalized_files.append(f.read())
-        elif isinstance(f, bytes):
-            normalized_files.append(f)
+    records = parse_uploaded_files(files)
+    if not records:
+        return "❌ No valid tracks.", None
 
-    all_tracks = []
-    for file_bytes in normalized_files:
-        try:
-            data = json.loads(file_bytes.decode("utf-8"))
-            if isinstance(data, dict) and "tracks" in data:
-                tracks = data["tracks"]
-            elif isinstance(data, list):
-                tracks = data
-            else:
-                tracks = []
-            # Extract Spotify URIs with playtime
-            for t in tracks:
-                uri = t.get("spotify_track_uri")
-                ms_played = t.get("ms_played", 0)
-                if uri:
-                    all_tracks.append((uri, ms_played))
-        except Exception as e:
-            return f"❌ Error reading file: {e}", None
+    # Remove duplicates and keep highest ms_played
+    unique = {}
+    for r in records:
+        uri = r["track_uri"]
+        if not uri:
+            continue
+        if uri not in unique or r["ms_played"] > unique[uri]:
+            unique[uri] = r["ms_played"]
 
-    if not all_tracks:
-        return "❌ No valid Spotify track URIs found in files.", None
-
-    # Remove duplicates (keep highest playtime)
-    unique_tracks = {}
-    for uri, ms_played in all_tracks:
-        if uri not in unique_tracks or ms_played > unique_tracks[uri]:
-            unique_tracks[uri] = ms_played
-
-    # Convert back to list and sort by playtime descending
-    sorted_tracks = sorted(unique_tracks.items(), key=lambda x: x[1], reverse=True)
+    # Sort by ms_played descending
+    sorted_tracks = sorted(unique.items(), key=lambda x: x[1], reverse=True)
 
     # Cap at 1000
-    capped_tracks = [uri for uri, _ in sorted_tracks[:1000]]
+    capped = [uri for uri, _ in sorted_tracks[:1000]]
 
     # Create playlist
-    playlist_name = "Generated Playlist"
-    create_resp = requests.post(
+    playlist_resp = requests.post(
         f"https://api.spotify.com/v1/users/{user_id}/playlists",
         headers={"Authorization": f"Bearer {access_token}"},
-        json={"name": playlist_name, "description": "Generated automatically", "public": True}
+        json={"name": "Generated Playlist", "public": True}
     )
-    if create_resp.status_code != 201:
-        return f"❌ Failed to create playlist: {create_resp.text}", None
+    if playlist_resp.status_code != 201:
+        return f"❌ Failed: {playlist_resp.text}", None
 
-    playlist_id = create_resp.json()["id"]
+    playlist_id = playlist_resp.json()["id"]
 
-    # Add tracks in chunks of 100 (Spotify API limit)
-    chunk_size = 100
-    for i in range(0, len(capped_tracks), chunk_size):
-        chunk = capped_tracks[i:i+chunk_size]
+    # Upload in batches
+    for i in range(0, len(capped), 100):
+        batch = capped[i:i+100]
         add_resp = requests.post(
             f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
             headers={"Authorization": f"Bearer {access_token}"},
-            json={"uris": chunk}
+            json={"uris": batch}
         )
         if add_resp.status_code != 201:
-            return f"❌ Failed to add tracks: {add_resp.text}", None
+            return f"❌ Add failed: {add_resp.text}", None
 
-    return f"🎉 Playlist created in your Spotify account with {len(capped_tracks)} unique tracks!", None
-
-
-# ---------------------------
-# Gradio Interface
-# ---------------------------
-with gr.Blocks(title="Spotify Playlist Generator") as gradio_app:
-
-    gr.Markdown("# 🎵 Spotify Playlist Generator")
-    gr.Markdown("## Step 1: Login to Spotify")
-
-    login_btn = gr.Button("Login with Spotify", elem_classes="spotify-login-btn")
-    status_box = gr.Textbox(value=check_login_status(), interactive=False, label="Login Status")
-    status_btn = gr.Button("🔄 Refresh Status")
-    status_btn.click(fn=check_login_status, inputs=[], outputs=[status_box])
-
-    # Open Spotify auth in popup
-    auth_url = get_auth_url()
-    login_btn.click(fn=lambda: None, inputs=[], outputs=[], js=f"window.open('{auth_url}', '_blank')")
-
-    gr.Markdown("## Step 2: Upload your JSON files")
-    files = gr.File(
-        label="Upload JSON Files",
-        file_types=[".json"],
-        file_count="multiple",
-        type="binary"
-    )
-
-    gr.Markdown("## Step 3: Generate Playlist")
-    submit_btn = gr.Button("🎶 Generate Playlist")
-    output_text = gr.Textbox(label="Status")
-    output_img = gr.Image(label="Preview", visible=False)
-
-    submit_btn.click(fn=generate_playlist, inputs=[files], outputs=[output_text, output_img])
+    return f"🎉 Playlist created with {len(capped)} tracks!", None
 
 # ---------------------------
-# Mount Gradio on FastAPI
+# Artist Rankings
 # ---------------------------
+def get_top_artists(files):
+    token = SPOTIFY_TOKENS.get("access_token")
+    if not token:
+        return "❌ Please login first."
+
+    records = parse_uploaded_files(files)
+    if not records:
+        return "❌ No data."
+
+    stats = {}
+
+    for r in records:
+        artist = r["artist_name"]
+        uri = r["artist_uri"]
+        ms = r["ms_played"]
+
+        if not artist:
+            continue
+
+        if artist not in stats:
+            stats[artist] = {"uri": uri, "ms": 0, "img": None}
+
+        stats[artist]["ms"] += ms
+
+    # Fetch images
+    for artist, info in stats.items():
+        info["img"] = fetch_spotify_image(info["uri"], "artist", token)
+
+    # Sort
+    top = sorted(stats.items(), key=lambda x: x[1]["ms"], reverse=True)[:50]
+
+    html = "<h2>Your Top 50 Artists</h2>"
+    for name, info in top:
+        hours = round(info["ms"] / 3600000, 2)
+        img = info["img"] or ""
+        html += f"""
+        <div style='display:flex;align-items:center;margin:10px 0;'>
+            <img src="{img}" style="width:80px;height:80px;border-radius:50%;margin-right:15px;">
+            <div>
+                <b>{name}</b><br>
+                {hours} hours listened
+            </div>
+        </div>
+        """
+    return html
+
+# ---------------------------
+# Album Rankings
+# ---------------------------
+def get_top_albums(files):
+    token = SPOTIFY_TOKENS.get("access_token")
+    if not token:
+        return "❌ Please login first."
+
+    records = parse_uploaded_files(files)
+    if not records:
+        return "❌ No data."
+
+    stats = {}
+
+    for r in records:
+        album = r["album_name"]
+        uri = r["album_uri"]
+        ms = r["ms_played"]
+
+        if not album:
+            continue
+
+        if album not in stats:
+            stats[album] = {"uri": uri, "ms": 0, "img": None}
+
+        stats[album]["ms"] += ms
+
+    for album, info in stats.items():
+        info["img"] = fetch_spotify_image(info["uri"], "album", token)
+
+    top = sorted(stats.items(), key=lambda x: x[1]["ms"], reverse=True)[:50]
+
+    html = "<h2>Your Top 50 Albums</h2>"
+    for name, info in top:
+        hours = round(info["ms"] / 3600000, 2)
+        img = info["img"] or ""
+        html += f"""
+        <div style='display:flex;align-items:center;margin:10px 0;'>
+            <img src="{img}" style="width:80px;height:80px;border-radius:10px;margin-right:15px;">
+            <div>
+                <b>{name}</b><br>
+                {hours} hours played
+            </div>
+        </div>
+        """
+    return html
+
+# ---------------------------
+# Gradio App
+# ---------------------------
+with gr.Blocks(title="Spotify Extended App", theme=gr.themes.Monochrome()) as gradio_app:
+
+    gr.Markdown("# 🎵 Spotify Playlist & Stats Dashboard")
+
+    with gr.Tabs():
+        with gr.Tab("Playlist Generator"):
+            login_btn = gr.Button("Login with Spotify")
+            status_box = gr.Textbox(value=check_login_status(), interactive=False)
+            status_btn = gr.Button("Refresh")
+            status_btn.click(check_login_status, [], status_box)
+
+            auth_url = get_auth_url()
+            login_btn.click(None, None, None, js=f"window.open('{auth_url}', '_blank')")
+
+            files = gr.File(file_types=[".json"], file_count="multiple")
+            submit_btn = gr.Button("Generate Playlist")
+            output_text = gr.Textbox()
+            submit_btn.click(generate_playlist, files, output_text)
+
+        with gr.Tab("Top Artists"):
+            artist_files = gr.File(file_types=[".json"], file_count="multiple")
+            artist_btn = gr.Button("Show Top 50 Artists")
+            artist_html = gr.HTML()
+            artist_btn.click(get_top_artists, artist_files, artist_html)
+
+        with gr.Tab("Top Albums"):
+            album_files = gr.File(file_types=[".json"], file_count="multiple")
+            album_btn = gr.Button("Show Top 50 Albums")
+            album_html = gr.HTML()
+            album_btn.click(get_top_albums, album_files, album_html)
+
 app = gr.mount_gradio_app(app, gradio_app, path="/")
